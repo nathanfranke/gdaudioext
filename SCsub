@@ -1,0 +1,10 @@
+#!/usr/bin/env python
+
+Import("env")
+Import("env_modules")
+
+env_gdaudioext = env_modules.Clone()
+
+env.Append(LIBS=["avutil", "avformat", "avcodec", "swresample"])
+
+env_gdaudioext.add_source_files(env.modules_sources, "*.cpp")
