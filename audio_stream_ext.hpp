@@ -68,12 +68,17 @@ class AudioStreamExt : public AudioStream {
 	AVPacket *packet;
 	AVFrame *frame;
 	
+	bool loaded = false;
+	Thread load_thread;
+	static void _run_load_job(void *p_self);
+	
 protected:
 	static void _bind_methods();
 
 public:
-	void set_source(String p_source);
+	void create(String p_source);
 	String get_source() const;
+	bool is_loaded() const;
 
 	virtual Ref<AudioStreamPlayback> instance_playback();
 	virtual String get_stream_name() const;

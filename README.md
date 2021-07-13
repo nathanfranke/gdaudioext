@@ -21,12 +21,15 @@ var stream := AudioStreamExt.new()
 
 func _ready() -> void:
 	# Opus Example
-	stream.source = "https://opus-codec.org/static/examples/samples/music_orig.wav"
+	stream.create("https://opus-codec.org/static/examples/samples/music_orig.wav")
 	
 	# MP3 Example
-	#stream.source = "https://file-examples-com.github.io/uploads/2017/11/file_example_MP3_5MG.mp3"
+	#stream.create("https://file-examples-com.github.io/uploads/2017/11/file_example_MP3_5MG.mp3")
 	
-	# Assign the audio stream and play it.
+	# Wait for the stream to load.
+	yield(stream, "loaded")
+	
+	# Assign the stream and play it.
 	player.stream = stream
 	player.play()
 

@@ -142,7 +142,8 @@ AudioStreamPlaybackExt::~AudioStreamPlaybackExt() {
 Ref<AudioStreamPlayback> AudioStreamExt::instance_playback() {
 	Ref<AudioStreamPlaybackExt> playback;
 	
-	ERR_FAIL_COND_V_MSG(source.empty(), playback, "No source specified. Please set the 'source' variable on the stream.");
+	ERR_FAIL_COND_V_MSG(source.empty(), playback, "No source specified. Please call the 'create' method.");
+	ERR_FAIL_COND_V_MSG(!loaded, playback, "Stream is not loaded yet. Please yield to the 'loaded' signal.");
 	
 	playback.instance();
 	playback->base = Ref<AudioStreamExt>(this);
@@ -153,105 +154,116 @@ String AudioStreamExt::get_stream_name() const {
 	return "";
 }
 
-void AudioStreamExt::set_source(String p_source) {
-	if(!source.empty()) {
-		duration = 0.0;
-		avformat_free_context(format_context);
-		avcodec_free_context(&codec_context);
-		swr_free(&swr);
-		av_packet_free(&packet);
-		av_frame_free(&frame);
+void AudioStreamExt::_run_load_job(void *p_self) {
+	AudioStreamExt *self = (AudioStreamExt *) p_self;
+	
+	int error;
+	
+	//print_line("Loading Audio Stream...");
+	
+	AVFormatContext *format_context = avformat_alloc_context();
+	ERR_FAIL_COND_MSG(!format_context, "Failed to allocate AVFormatContext.");
+	
+	error = avformat_open_input(&format_context, self->source.utf8().ptrw(), NULL, NULL);
+	ERR_FAIL_COND_MSG(error < 0, "Failed to open input file '" + self->source + "'.");
+	
+	error = avformat_find_stream_info(format_context, NULL);
+	ERR_FAIL_COND_MSG(error < 0, "Failed to find stream info.");
+	
+	AVStream *stream = NULL;
+	for(unsigned int i = 0; i < format_context->nb_streams; ++i) {
+		AVStream *s = format_context->streams[i];
+		if(s->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
+			stream = s;
+			break;
+		}
 	}
 	
-	if(!p_source.empty()) {
-		int error;
-		
-		//print_line("Loading Audio Stream...");
-		
-		AVFormatContext *format_context = avformat_alloc_context();
-		ERR_FAIL_COND_MSG(!format_context, "Failed to allocate AVFormatContext.");
-		
-		error = avformat_open_input(&format_context, p_source.utf8().ptrw(), NULL, NULL);
-		ERR_FAIL_COND_MSG(error < 0, "Failed to open input file '" + p_source + "'.");
-		
-		error = avformat_find_stream_info(format_context, NULL);
-		ERR_FAIL_COND_MSG(error < 0, "Failed to find stream info.");
-		
-		AVStream *stream = NULL;
-		for(unsigned int i = 0; i < format_context->nb_streams; ++i) {
-			AVStream *s = format_context->streams[i];
-			if(s->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
-				stream = s;
-				break;
-			}
-		}
-		
-		ERR_FAIL_COND_MSG(!stream, "Failed to find an audio stream.");
-		
-		//printf("AVSTREAM time_base %d/%d\n", stream->time_base.num, stream->time_base.den);
-		//printf("AVSTREAM start_time %f\n", stream->start_time * av_q2d(stream->time_base));
-		//printf("AVSTREAM duration %f\n", stream->duration * av_q2d(stream->time_base));
-		
-		AVCodec *codec = avcodec_find_decoder(stream->codecpar->codec_id);
-		ERR_FAIL_COND_MSG(!codec, "Unsupported codec: " + String(Variant(stream->codecpar->codec_id)) + ".");
-		
-		AVCodecContext *codec_context = avcodec_alloc_context3(codec);
-		ERR_FAIL_COND_MSG(!codec_context, "Failed to allocate AVCodecContext.");
-		
-		error = avcodec_parameters_to_context(codec_context, stream->codecpar);
-		ERR_FAIL_COND_MSG(error < 0, "Failed to copy parameters to context.");
-		
-		error = avcodec_open2(codec_context, codec, NULL);
-		ERR_FAIL_COND_MSG(error < 0, "Failed to open codec.");
-		
-		//printf("Codec: %s, Codec ID: %d, Bit Rate: %ld\n", codec->name, codec->id, codec_context->bit_rate);
-		
-		SwrContext *swr = swr_alloc();
-		ERR_FAIL_COND_MSG(!swr, "Failed to allocate SwrContext.");
-		
-		av_opt_set_int(swr, "in_channel_count", codec_context->channels, 0);
-		av_opt_set_int(swr, "out_channel_count", codec_context->channels, 0);
-		av_opt_set_int(swr, "in_channel_layout", codec_context->channel_layout, 0);
-		av_opt_set_int(swr, "out_channel_layout", codec_context->channel_layout, 0);
-		av_opt_set_int(swr, "in_sample_rate", stream->codecpar->sample_rate, 0);
-		av_opt_set_int(swr, "out_sample_rate", stream->codecpar->sample_rate, 0);
-		av_opt_set_sample_fmt(swr, "in_sample_fmt",  codec_context->sample_fmt, 0);
-		av_opt_set_sample_fmt(swr, "out_sample_fmt", DESTINATION_FORMAT, 0);
-		swr_init(swr);
-		
-		AVPacket *packet = av_packet_alloc();
-		ERR_FAIL_COND_MSG(!packet, "Failed to allocate AVPacket.");
-		
-		AVFrame *frame = av_frame_alloc();
-		ERR_FAIL_COND_MSG(!frame, "Failed to allocate AVFrame.");
-		
-		this->duration = format_context->duration * av_q2d(AV_TIME_BASE_Q);
-		this->format_context = format_context;
-		this->stream = stream;
-		this->codec = codec;
-		this->codec_context = codec_context;
-		this->swr = swr;
-		this->packet = packet;
-		this->frame = frame;
-	}
+	ERR_FAIL_COND_MSG(!stream, "Failed to find an audio stream.");
+	
+	//printf("AVSTREAM time_base %d/%d\n", stream->time_base.num, stream->time_base.den);
+	//printf("AVSTREAM start_time %f\n", stream->start_time * av_q2d(stream->time_base));
+	//printf("AVSTREAM duration %f\n", stream->duration * av_q2d(stream->time_base));
+	
+	AVCodec *codec = avcodec_find_decoder(stream->codecpar->codec_id);
+	ERR_FAIL_COND_MSG(!codec, "Unsupported codec: " + String(Variant(stream->codecpar->codec_id)) + ".");
+	
+	AVCodecContext *codec_context = avcodec_alloc_context3(codec);
+	ERR_FAIL_COND_MSG(!codec_context, "Failed to allocate AVCodecContext.");
+	
+	error = avcodec_parameters_to_context(codec_context, stream->codecpar);
+	ERR_FAIL_COND_MSG(error < 0, "Failed to copy parameters to context.");
+	
+	error = avcodec_open2(codec_context, codec, NULL);
+	ERR_FAIL_COND_MSG(error < 0, "Failed to open codec.");
+	
+	//printf("Codec: %s, Codec ID: %d, Bit Rate: %ld\n", codec->name, codec->id, codec_context->bit_rate);
+	
+	SwrContext *swr = swr_alloc();
+	ERR_FAIL_COND_MSG(!swr, "Failed to allocate SwrContext.");
+	
+	av_opt_set_int(swr, "in_channel_count", codec_context->channels, 0);
+	av_opt_set_int(swr, "out_channel_count", codec_context->channels, 0);
+	av_opt_set_int(swr, "in_channel_layout", codec_context->channel_layout, 0);
+	av_opt_set_int(swr, "out_channel_layout", codec_context->channel_layout, 0);
+	av_opt_set_int(swr, "in_sample_rate", stream->codecpar->sample_rate, 0);
+	av_opt_set_int(swr, "out_sample_rate", stream->codecpar->sample_rate, 0);
+	av_opt_set_sample_fmt(swr, "in_sample_fmt",  codec_context->sample_fmt, 0);
+	av_opt_set_sample_fmt(swr, "out_sample_fmt", DESTINATION_FORMAT, 0);
+	swr_init(swr);
+	
+	AVPacket *packet = av_packet_alloc();
+	ERR_FAIL_COND_MSG(!packet, "Failed to allocate AVPacket.");
+	
+	AVFrame *frame = av_frame_alloc();
+	ERR_FAIL_COND_MSG(!frame, "Failed to allocate AVFrame.");
+	
+	self->duration = format_context->duration * av_q2d(AV_TIME_BASE_Q);
+	self->format_context = format_context;
+	self->stream = stream;
+	self->codec = codec;
+	self->codec_context = codec_context;
+	self->swr = swr;
+	self->packet = packet;
+	self->frame = frame;
+	self->loaded = true;
+	self->call_deferred("emit_signal", "loaded");
+}
+
+void AudioStreamExt::create(String p_source) {
+	ERR_FAIL_COND_MSG(!source.empty(), "Stream has already been created.");
+	ERR_FAIL_COND_MSG(p_source.empty(), "Invalid source specified.");
 	
 	source = p_source;
+	load_thread.start(AudioStreamExt::_run_load_job, this);
 }
 
 String AudioStreamExt::get_source() const {
 	return source;
 }
 
+bool AudioStreamExt::is_loaded() const {
+	return loaded;
+}
+
 void AudioStreamExt::_bind_methods() {
-	ClassDB::bind_method(D_METHOD("set_source", "source"), &AudioStreamExt::set_source);
+	ClassDB::bind_method(D_METHOD("create"), &AudioStreamExt::create);
 	ClassDB::bind_method(D_METHOD("get_source"), &AudioStreamExt::get_source);
+	ClassDB::bind_method(D_METHOD("is_loaded"), &AudioStreamExt::is_loaded);
 	
-	ADD_PROPERTY(PropertyInfo(Variant::STRING, "source", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_NOEDITOR), "set_source", "get_source");
+	ADD_SIGNAL(MethodInfo("loaded"));
 }
 
 AudioStreamExt::AudioStreamExt() {
 }
 
 AudioStreamExt::~AudioStreamExt() {
-	source = "";
+	if(!source.empty()) {
+		load_thread.wait_to_finish();
+		avformat_free_context(format_context);
+		avcodec_free_context(&codec_context);
+		swr_free(&swr);
+		av_packet_free(&packet);
+		av_frame_free(&frame);
+	}
 }
