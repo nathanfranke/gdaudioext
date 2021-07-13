@@ -8,6 +8,7 @@ extern "C" {
 #include <libswresample/swresample.h>
 }
 
+#include "core/os/thread.h"
 #include "servers/audio/audio_stream.h"
 
 class AudioStreamExt;
@@ -16,8 +17,6 @@ class AudioStreamPlaybackExt : public AudioStreamPlaybackResampled {
 	GDCLASS(AudioStreamPlaybackExt, AudioStreamPlaybackResampled)
 	friend class AudioStreamExt;
 	
-	int cur = 0;
-	
 	Ref<AudioStreamExt> base;
 	bool active = false;
 	
@@ -25,13 +24,17 @@ class AudioStreamPlaybackExt : public AudioStreamPlaybackResampled {
 	int frame_read_pos = 0;
 	int frame_read_len = 0;
 	
+	bool busy_seeking = false;
 	bool seek_job = false;
-	int64_t seek_pos;
+	float seek_pos;
+	
+	Thread seek_thread;
+	static void _run_seek_job(void *p_self);
 	
 	double last_position = 0.0;
-	double last_duration = 0.0;
 	
 protected:
+	void _clear_frame_buffer();
 	virtual void _mix_internal(AudioFrame *p_buffer, int p_frames);
 	virtual float get_stream_sampling_rate();
 	
@@ -52,18 +55,16 @@ class AudioStreamExt : public AudioStream {
 	
 	friend class AudioStreamPlaybackExt;
 	
-	String source;
+	static const AVSampleFormat DESTINATION_FORMAT = AV_SAMPLE_FMT_FLT;
 	
+	String source;
 	float duration = 0.0;
 	
 	AVFormatContext *format_context;
 	AVStream *stream;
-	
 	AVCodec *codec;
 	AVCodecContext *codec_context;
-	
 	SwrContext *swr;
-	
 	AVPacket *packet;
 	AVFrame *frame;
 	

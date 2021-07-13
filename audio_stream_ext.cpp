@@ -1,23 +1,62 @@
 #include "audio_stream_ext.hpp"
 
+void AudioStreamPlaybackExt::_run_seek_job(void *p_self) {
+	AudioStreamPlaybackExt *self = (AudioStreamPlaybackExt *)p_self;
+	
+	self->busy_seeking = true;
+	
+	int64_t frame = int64_t(self->seek_pos / av_q2d(self->base->stream->time_base));
+	
+	// This call can block for several hundred milliseconds if audio from the internet is playing.
+	int error = avformat_seek_file(self->base->format_context, self->base->stream->index, INT64_MIN, frame, INT64_MAX, AVSEEK_FLAG_ANY);
+	ERR_FAIL_COND_MSG(error < 0, "Failed to seek.");
+	
+	self->busy_seeking = false;
+}
+
+void AudioStreamPlaybackExt::_clear_frame_buffer() {
+	if(frame_read_buffer) {
+		AudioServer::get_singleton()->audio_data_free(frame_read_buffer);
+		frame_read_buffer = NULL;
+		frame_read_pos = 0;
+		frame_read_len = 0;
+	}
+}
+
 void AudioStreamPlaybackExt::_mix_internal(AudioFrame *p_buffer, int p_frames) {
 	ERR_FAIL_COND(!active);
 	int error;
 	
+	int pos = 0;
+	
+	if(busy_seeking) {
+		while(pos < p_frames) {
+			p_buffer[pos++] = AudioFrame(0, 0);
+		}
+		
+		return;
+	}
+	
+	seek_thread.wait_to_finish();
+	
 	if(seek_job) {
 		seek_job = false;
 		
-		error = avformat_seek_file(base->format_context, base->stream->index, INT64_MIN, seek_pos, INT64_MAX, 0);
-		ERR_FAIL_COND_MSG(error < 0, "Failed to seek.");
+		// Clear old frame buffer so only fresh audio plays.
+		_clear_frame_buffer();
+		
+		// Play silence while loading.
+		while(pos < p_frames) {
+			p_buffer[pos++] = AudioFrame(0, 0);
+		}
+		
+		seek_thread.start(AudioStreamPlaybackExt::_run_seek_job, this);
+		return;
 	}
-	
-	int pos = 0;
 	
 	while(pos < p_frames) {
 		if(frame_read_pos >= frame_read_len) {
-			if(frame_read_buffer) {
-				AudioServer::get_singleton()->audio_data_free(frame_read_buffer);
-			}
+			_clear_frame_buffer();
 			
 			error = av_read_frame(base->format_context, base->packet);
 			if(error < 0) {
@@ -34,14 +73,14 @@ void AudioStreamPlaybackExt::_mix_internal(AudioFrame *p_buffer, int p_frames) {
 			error = avcodec_receive_frame(base->codec_context, base->frame);
 			ERR_FAIL_COND(error < 0);
 			
-			frame_read_buffer = (float *)AudioServer::get_singleton()->audio_data_alloc(sizeof(float) * base->frame->nb_samples * 2); // TODO: Assuming two channels
+			int alloc_size = av_samples_get_buffer_size(NULL, base->stream->codecpar->channels, base->frame->nb_samples, AudioStreamExt::DESTINATION_FORMAT, 0);
+			frame_read_buffer = (float *)AudioServer::get_singleton()->audio_data_alloc(alloc_size);
 			frame_read_pos = 0;
-			frame_read_len = base->frame->nb_samples * 2;
+			frame_read_len = base->frame->nb_samples * base->stream->codecpar->channels;
 			
 			swr_convert(base->swr, (uint8_t **) &frame_read_buffer, base->frame->nb_samples, const_cast<const uint8_t **>(base->frame->extended_data), base->frame->nb_samples);
 			
 			last_position = base->packet->pts * av_q2d(base->stream->time_base);
-			last_duration = base->stream->duration * av_q2d(base->stream->time_base);
 			
 			av_packet_unref(base->packet);
 			av_frame_unref(base->frame);
@@ -55,7 +94,7 @@ void AudioStreamPlaybackExt::_mix_internal(AudioFrame *p_buffer, int p_frames) {
 }
 
 float AudioStreamPlaybackExt::get_stream_sampling_rate() {
-	return float(1.0 / av_q2d(base->stream->time_base));
+	return float(base->codec_context->sample_rate);
 }
 
 void AudioStreamPlaybackExt::start(float p_from_pos) {
@@ -84,13 +123,10 @@ void AudioStreamPlaybackExt::seek(float p_time) {
 	if (!active) {
 		return;
 	}
-
-	if (p_time >= last_duration) {
-		p_time = 0;
-	}
-
+	
 	seek_job = true;
-	seek_pos = int64_t(p_time / av_q2d(base->stream->time_base));
+	seek_pos = p_time;
+	last_position = p_time;
 }
 
 AudioStreamPlaybackExt::AudioStreamPlaybackExt() {
@@ -100,6 +136,7 @@ AudioStreamPlaybackExt::~AudioStreamPlaybackExt() {
 	if(frame_read_buffer) {
 		AudioServer::get_singleton()->audio_data_free(frame_read_buffer);
 	}
+	seek_thread.wait_to_finish();
 }
 
 Ref<AudioStreamPlayback> AudioStreamExt::instance_playback() {
@@ -155,13 +192,14 @@ void AudioStreamExt::set_source(String p_source) {
 		//printf("AVSTREAM start_time %f\n", stream->start_time * av_q2d(stream->time_base));
 		//printf("AVSTREAM duration %f\n", stream->duration * av_q2d(stream->time_base));
 		
-		duration = stream->duration * av_q2d(stream->time_base);
-		
 		AVCodec *codec = avcodec_find_decoder(stream->codecpar->codec_id);
 		ERR_FAIL_COND_MSG(!codec, "Unsupported codec: " + String(Variant(stream->codecpar->codec_id)) + ".");
 		
 		AVCodecContext *codec_context = avcodec_alloc_context3(codec);
 		ERR_FAIL_COND_MSG(!codec_context, "Failed to allocate AVCodecContext.");
+		
+		error = avcodec_parameters_to_context(codec_context, stream->codecpar);
+		ERR_FAIL_COND_MSG(error < 0, "Failed to copy parameters to context.");
 		
 		error = avcodec_open2(codec_context, codec, NULL);
 		ERR_FAIL_COND_MSG(error < 0, "Failed to open codec.");
@@ -171,12 +209,14 @@ void AudioStreamExt::set_source(String p_source) {
 		SwrContext *swr = swr_alloc();
 		ERR_FAIL_COND_MSG(!swr, "Failed to allocate SwrContext.");
 		
-		av_opt_set_int(swr, "in_channel_layout", stream->codecpar->channel_layout, 0);
-		av_opt_set_int(swr, "out_channel_layout", stream->codecpar->channel_layout, 0);
+		av_opt_set_int(swr, "in_channel_count", codec_context->channels, 0);
+		av_opt_set_int(swr, "out_channel_count", codec_context->channels, 0);
+		av_opt_set_int(swr, "in_channel_layout", codec_context->channel_layout, 0);
+		av_opt_set_int(swr, "out_channel_layout", codec_context->channel_layout, 0);
 		av_opt_set_int(swr, "in_sample_rate", stream->codecpar->sample_rate, 0);
 		av_opt_set_int(swr, "out_sample_rate", stream->codecpar->sample_rate, 0);
-		av_opt_set_sample_fmt(swr, "in_sample_fmt",  AV_SAMPLE_FMT_FLTP, 0);
-		av_opt_set_sample_fmt(swr, "out_sample_fmt", AV_SAMPLE_FMT_FLT, 0);
+		av_opt_set_sample_fmt(swr, "in_sample_fmt",  codec_context->sample_fmt, 0);
+		av_opt_set_sample_fmt(swr, "out_sample_fmt", DESTINATION_FORMAT, 0);
 		swr_init(swr);
 		
 		AVPacket *packet = av_packet_alloc();
@@ -185,6 +225,7 @@ void AudioStreamExt::set_source(String p_source) {
 		AVFrame *frame = av_frame_alloc();
 		ERR_FAIL_COND_MSG(!frame, "Failed to allocate AVFrame.");
 		
+		this->duration = format_context->duration * av_q2d(AV_TIME_BASE_Q);
 		this->format_context = format_context;
 		this->stream = stream;
 		this->codec = codec;
@@ -194,7 +235,7 @@ void AudioStreamExt::set_source(String p_source) {
 		this->frame = frame;
 	}
 	
-	this->source = p_source;
+	source = p_source;
 }
 
 String AudioStreamExt::get_source() const {
