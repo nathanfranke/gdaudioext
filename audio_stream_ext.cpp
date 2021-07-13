@@ -3,15 +3,20 @@
 void AudioStreamPlaybackExt::_run_seek_job(void *p_self) {
 	AudioStreamPlaybackExt *self = (AudioStreamPlaybackExt *)p_self;
 	
+	self->busy_seeking_time = OS::get_singleton()->get_ticks_msec();
 	self->busy_seeking = true;
 	
-	int64_t frame = int64_t(self->seek_pos / av_q2d(self->base->stream->time_base));
+	self->base->load_thread.wait_to_finish();
 	
-	// This call can block for several hundred milliseconds if audio from the internet is playing.
-	int error = avformat_seek_file(self->base->format_context, self->base->stream->index, INT64_MIN, frame, INT64_MAX, AVSEEK_FLAG_ANY);
-	ERR_FAIL_COND_MSG(error < 0, "Failed to seek.");
-	
-	self->busy_seeking = false;
+	if(self->base->loaded) {
+		int64_t frame = int64_t(self->seek_pos / av_q2d(self->base->stream->time_base));
+		
+		// This call can block for several hundred milliseconds if audio from the internet is playing.
+		int error = avformat_seek_file(self->base->format_context, self->base->stream->index, INT64_MIN, frame, INT64_MAX, AVSEEK_FLAG_ANY);
+		ERR_FAIL_COND_MSG(error < 0, "Failed to seek.");
+		
+		self->busy_seeking = false;
+	}
 }
 
 void AudioStreamPlaybackExt::_clear_frame_buffer() {
@@ -94,7 +99,11 @@ void AudioStreamPlaybackExt::_mix_internal(AudioFrame *p_buffer, int p_frames) {
 }
 
 float AudioStreamPlaybackExt::get_stream_sampling_rate() {
-	return float(base->codec_context->sample_rate);
+	if(base->loaded) {
+		return float(base->codec_context->sample_rate);
+	} else {
+		return 0.0;
+	}
 }
 
 void AudioStreamPlaybackExt::start(float p_from_pos) {
@@ -129,6 +138,15 @@ void AudioStreamPlaybackExt::seek(float p_time) {
 	last_position = p_time;
 }
 
+bool AudioStreamPlaybackExt::is_buffering() const {
+	// Only count as buffering if it has been happening for more than 10ms.
+	return busy_seeking && OS::get_singleton()->get_ticks_msec() - busy_seeking_time > 10;
+}
+
+void AudioStreamPlaybackExt::_bind_methods() {
+	ClassDB::bind_method(D_METHOD("is_buffering"), &AudioStreamPlaybackExt::is_buffering);
+}
+
 AudioStreamPlaybackExt::AudioStreamPlaybackExt() {
 }
 
@@ -143,7 +161,6 @@ Ref<AudioStreamPlayback> AudioStreamExt::instance_playback() {
 	Ref<AudioStreamPlaybackExt> playback;
 	
 	ERR_FAIL_COND_V_MSG(source.empty(), playback, "No source specified. Please call the 'create' method.");
-	ERR_FAIL_COND_V_MSG(!loaded, playback, "Stream is not loaded yet. Please yield to the 'loaded' signal.");
 	
 	playback.instance();
 	playback->base = Ref<AudioStreamExt>(this);
@@ -161,71 +178,63 @@ void AudioStreamExt::_run_load_job(void *p_self) {
 	
 	//print_line("Loading Audio Stream...");
 	
-	AVFormatContext *format_context = avformat_alloc_context();
-	ERR_FAIL_COND_MSG(!format_context, "Failed to allocate AVFormatContext.");
+	self->format_context = avformat_alloc_context();
+	ERR_FAIL_COND_MSG(!self->format_context, "Failed to allocate AVFormatContext.");
 	
-	error = avformat_open_input(&format_context, self->source.utf8().ptrw(), NULL, NULL);
+	error = avformat_open_input(&self->format_context, self->source.utf8().ptrw(), NULL, NULL);
 	ERR_FAIL_COND_MSG(error < 0, "Failed to open input file '" + self->source + "'.");
 	
-	error = avformat_find_stream_info(format_context, NULL);
+	error = avformat_find_stream_info(self->format_context, NULL);
 	ERR_FAIL_COND_MSG(error < 0, "Failed to find stream info.");
 	
-	AVStream *stream = NULL;
-	for(unsigned int i = 0; i < format_context->nb_streams; ++i) {
-		AVStream *s = format_context->streams[i];
+	for(unsigned int i = 0; i < self->format_context->nb_streams; ++i) {
+		AVStream *s = self->format_context->streams[i];
 		if(s->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
-			stream = s;
+			self->stream = s;
 			break;
 		}
 	}
 	
-	ERR_FAIL_COND_MSG(!stream, "Failed to find an audio stream.");
+	ERR_FAIL_COND_MSG(!self->stream, "Failed to find an audio stream.");
 	
 	//printf("AVSTREAM time_base %d/%d\n", stream->time_base.num, stream->time_base.den);
 	//printf("AVSTREAM start_time %f\n", stream->start_time * av_q2d(stream->time_base));
 	//printf("AVSTREAM duration %f\n", stream->duration * av_q2d(stream->time_base));
 	
-	AVCodec *codec = avcodec_find_decoder(stream->codecpar->codec_id);
-	ERR_FAIL_COND_MSG(!codec, "Unsupported codec: " + String(Variant(stream->codecpar->codec_id)) + ".");
+	self->codec = avcodec_find_decoder(self->stream->codecpar->codec_id);
+	ERR_FAIL_COND_MSG(!self->codec, "Unsupported codec: " + String(Variant(self->stream->codecpar->codec_id)) + ".");
 	
-	AVCodecContext *codec_context = avcodec_alloc_context3(codec);
-	ERR_FAIL_COND_MSG(!codec_context, "Failed to allocate AVCodecContext.");
+	self->codec_context = avcodec_alloc_context3(self->codec);
+	ERR_FAIL_COND_MSG(!self->codec_context, "Failed to allocate AVCodecContext.");
 	
-	error = avcodec_parameters_to_context(codec_context, stream->codecpar);
+	error = avcodec_parameters_to_context(self->codec_context, self->stream->codecpar);
 	ERR_FAIL_COND_MSG(error < 0, "Failed to copy parameters to context.");
 	
-	error = avcodec_open2(codec_context, codec, NULL);
+	error = avcodec_open2(self->codec_context, self->codec, NULL);
 	ERR_FAIL_COND_MSG(error < 0, "Failed to open codec.");
 	
 	//printf("Codec: %s, Codec ID: %d, Bit Rate: %ld\n", codec->name, codec->id, codec_context->bit_rate);
 	
-	SwrContext *swr = swr_alloc();
-	ERR_FAIL_COND_MSG(!swr, "Failed to allocate SwrContext.");
+	self->swr = swr_alloc();
+	ERR_FAIL_COND_MSG(!self->swr, "Failed to allocate SwrContext.");
 	
-	av_opt_set_int(swr, "in_channel_count", codec_context->channels, 0);
-	av_opt_set_int(swr, "out_channel_count", codec_context->channels, 0);
-	av_opt_set_int(swr, "in_channel_layout", codec_context->channel_layout, 0);
-	av_opt_set_int(swr, "out_channel_layout", codec_context->channel_layout, 0);
-	av_opt_set_int(swr, "in_sample_rate", stream->codecpar->sample_rate, 0);
-	av_opt_set_int(swr, "out_sample_rate", stream->codecpar->sample_rate, 0);
-	av_opt_set_sample_fmt(swr, "in_sample_fmt",  codec_context->sample_fmt, 0);
-	av_opt_set_sample_fmt(swr, "out_sample_fmt", DESTINATION_FORMAT, 0);
-	swr_init(swr);
+	av_opt_set_int(self->swr, "in_channel_count", self->codec_context->channels, 0);
+	av_opt_set_int(self->swr, "out_channel_count", self->codec_context->channels, 0);
+	av_opt_set_int(self->swr, "in_channel_layout", self->codec_context->channel_layout, 0);
+	av_opt_set_int(self->swr, "out_channel_layout", self->codec_context->channel_layout, 0);
+	av_opt_set_int(self->swr, "in_sample_rate", self->stream->codecpar->sample_rate, 0);
+	av_opt_set_int(self->swr, "out_sample_rate", self->stream->codecpar->sample_rate, 0);
+	av_opt_set_sample_fmt(self->swr, "in_sample_fmt",  self->codec_context->sample_fmt, 0);
+	av_opt_set_sample_fmt(self->swr, "out_sample_fmt", DESTINATION_FORMAT, 0);
+	swr_init(self->swr);
 	
-	AVPacket *packet = av_packet_alloc();
-	ERR_FAIL_COND_MSG(!packet, "Failed to allocate AVPacket.");
+	self->packet = av_packet_alloc();
+	ERR_FAIL_COND_MSG(!self->packet, "Failed to allocate AVPacket.");
 	
-	AVFrame *frame = av_frame_alloc();
-	ERR_FAIL_COND_MSG(!frame, "Failed to allocate AVFrame.");
+	self->frame = av_frame_alloc();
+	ERR_FAIL_COND_MSG(!self->frame, "Failed to allocate AVFrame.");
 	
-	self->duration = format_context->duration * av_q2d(AV_TIME_BASE_Q);
-	self->format_context = format_context;
-	self->stream = stream;
-	self->codec = codec;
-	self->codec_context = codec_context;
-	self->swr = swr;
-	self->packet = packet;
-	self->frame = frame;
+	self->duration = self->format_context->duration * av_q2d(AV_TIME_BASE_Q);
 	self->loaded = true;
 	self->call_deferred("emit_signal", "loaded");
 }
@@ -247,7 +256,7 @@ bool AudioStreamExt::is_loaded() const {
 }
 
 void AudioStreamExt::_bind_methods() {
-	ClassDB::bind_method(D_METHOD("create"), &AudioStreamExt::create);
+	ClassDB::bind_method(D_METHOD("create", "source"), &AudioStreamExt::create);
 	ClassDB::bind_method(D_METHOD("get_source"), &AudioStreamExt::get_source);
 	ClassDB::bind_method(D_METHOD("is_loaded"), &AudioStreamExt::is_loaded);
 	
@@ -260,10 +269,20 @@ AudioStreamExt::AudioStreamExt() {
 AudioStreamExt::~AudioStreamExt() {
 	if(!source.empty()) {
 		load_thread.wait_to_finish();
+	}
+	if(format_context) {
 		avformat_free_context(format_context);
+	}
+	if(codec_context) {
 		avcodec_free_context(&codec_context);
+	}
+	if(swr) {
 		swr_free(&swr);
+	}
+	if(packet) {
 		av_packet_free(&packet);
+	}
+	if(frame) {
 		av_frame_free(&frame);
 	}
 }

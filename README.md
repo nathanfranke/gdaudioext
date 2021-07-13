@@ -26,9 +26,6 @@ func _ready() -> void:
 	# MP3 Example
 	#stream.create("https://file-examples-com.github.io/uploads/2017/11/file_example_MP3_5MG.mp3")
 	
-	# Wait for the stream to load.
-	yield(stream, "loaded")
-	
 	# Assign the stream and play it.
 	player.stream = stream
 	player.play()

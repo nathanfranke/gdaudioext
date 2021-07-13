@@ -24,7 +24,9 @@ class AudioStreamPlaybackExt : public AudioStreamPlaybackResampled {
 	int frame_read_pos = 0;
 	int frame_read_len = 0;
 	
+	int64_t busy_seeking_time;
 	bool busy_seeking = false;
+	
 	bool seek_job = false;
 	float seek_pos;
 	
@@ -38,6 +40,8 @@ protected:
 	virtual void _mix_internal(AudioFrame *p_buffer, int p_frames);
 	virtual float get_stream_sampling_rate();
 	
+	static void _bind_methods();
+	
 public:
 	virtual void start(float p_from_pos = 0.0);
 	virtual void stop();
@@ -45,6 +49,8 @@ public:
 	virtual int get_loop_count() const;
 	virtual float get_playback_position() const;
 	virtual void seek(float p_time);
+	
+	virtual bool is_buffering() const;
 	
 	AudioStreamPlaybackExt();
 	~AudioStreamPlaybackExt();
@@ -60,13 +66,13 @@ class AudioStreamExt : public AudioStream {
 	String source;
 	float duration = 0.0;
 	
-	AVFormatContext *format_context;
-	AVStream *stream;
-	AVCodec *codec;
-	AVCodecContext *codec_context;
-	SwrContext *swr;
-	AVPacket *packet;
-	AVFrame *frame;
+	AVFormatContext *format_context = NULL;
+	AVStream *stream = NULL;
+	AVCodec *codec = NULL;
+	AVCodecContext *codec_context = NULL;
+	SwrContext *swr = NULL;
+	AVPacket *packet = NULL;
+	AVFrame *frame = NULL;
 	
 	bool loaded = false;
 	Thread load_thread;
@@ -74,15 +80,15 @@ class AudioStreamExt : public AudioStream {
 	
 protected:
 	static void _bind_methods();
-
+	
 public:
 	void create(String p_source);
 	String get_source() const;
 	bool is_loaded() const;
-
+	
 	virtual Ref<AudioStreamPlayback> instance_playback();
 	virtual String get_stream_name() const;
-
+	
 	virtual float get_length() const { return duration; }
 	
 	AudioStreamExt();
