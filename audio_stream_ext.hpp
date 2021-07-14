@@ -24,8 +24,10 @@ class AudioStreamPlaybackExt : public AudioStreamPlaybackResampled {
 	int frame_read_pos = 0;
 	int frame_read_len = 0;
 	
-	int64_t busy_seeking_time;
 	bool busy_seeking = false;
+	
+	int64_t buffering_time = INT64_MIN;
+	bool buffering = true;
 	
 	bool seek_job = false;
 	float seek_pos;

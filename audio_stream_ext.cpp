@@ -3,8 +3,12 @@
 void AudioStreamPlaybackExt::_run_seek_job(void *p_self) {
 	AudioStreamPlaybackExt *self = (AudioStreamPlaybackExt *)p_self;
 	
-	self->busy_seeking_time = OS::get_singleton()->get_ticks_msec();
 	self->busy_seeking = true;
+	
+	if(!self->buffering) {
+		self->buffering_time = OS::get_singleton()->get_ticks_msec();
+		self->buffering = true;
+	}
 	
 	self->base->load_thread.wait_to_finish();
 	
@@ -16,6 +20,8 @@ void AudioStreamPlaybackExt::_run_seek_job(void *p_self) {
 		ERR_FAIL_COND_MSG(error < 0, "Failed to seek.");
 		
 		self->busy_seeking = false;
+		
+		self->buffering = false;
 	}
 }
 
@@ -140,7 +146,7 @@ void AudioStreamPlaybackExt::seek(float p_time) {
 
 bool AudioStreamPlaybackExt::is_buffering() const {
 	// Only count as buffering if it has been happening for more than 10ms.
-	return busy_seeking && OS::get_singleton()->get_ticks_msec() - busy_seeking_time > 10;
+	return buffering && OS::get_singleton()->get_ticks_msec() - buffering_time > 10;
 }
 
 void AudioStreamPlaybackExt::_bind_methods() {
