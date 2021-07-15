@@ -3,8 +3,6 @@
 void AudioStreamPlaybackExt::_run_seek_job(void *p_self) {
 	AudioStreamPlaybackExt *self = (AudioStreamPlaybackExt *)p_self;
 	
-	self->busy_seeking = true;
-	
 	if(!self->buffering) {
 		self->buffering_time = OS::get_singleton()->get_ticks_msec();
 		self->buffering = true;
@@ -52,6 +50,7 @@ void AudioStreamPlaybackExt::_mix_internal(AudioFrame *p_buffer, int p_frames) {
 	
 	if(seek_job) {
 		seek_job = false;
+		busy_seeking = true;
 		
 		// Clear old frame buffer so only fresh audio plays.
 		_clear_frame_buffer();
