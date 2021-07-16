@@ -239,7 +239,7 @@ void AudioStreamExt::_run_load_job(void *p_self) {
 	self->frame = av_frame_alloc();
 	ERR_FAIL_COND_MSG(!self->frame, "Failed to allocate AVFrame.");
 	
-	self->duration = self->format_context->duration * av_q2d(AV_TIME_BASE_Q);
+	self->duration = self->format_context->duration * av_q2d(av_get_time_base_q());
 	self->loaded = true;
 	self->call_deferred("emit_signal", "loaded");
 }
