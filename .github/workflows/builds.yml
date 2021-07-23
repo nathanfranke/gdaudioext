@@ -10,7 +10,9 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - run: sudo apt-get install build-essential pkg-config libx11-dev libxcursor-dev libxinerama-dev libgl1-mesa-dev libglu-dev libasound2-dev libpulse-dev libdbus-1-dev libudev-dev libxi-dev libxrandr-dev yasm
+      - run: |
+          sudo apt-get update
+          sudo apt-get install build-essential pkg-config libx11-dev libxcursor-dev libxinerama-dev libgl1-mesa-dev libglu-dev libasound2-dev libpulse-dev libdbus-1-dev libudev-dev libxi-dev libxrandr-dev libavutil-dev libavformat-dev libavcodec-dev libswresample-dev yasm
       
       - uses: actions/checkout@v2
         with:
@@ -21,13 +23,21 @@ jobs:
         with:
           path: modules/gdaudioext
       
+      - id: linux-cache
+        uses: actions/cache@v2
+        with:
+          path: ${{github.workspace}}/.scons_cache/
+          key: ${{github.job}}-${{github.ref}}-${{github.sha}}
+      
       - uses: actions/setup-python@v2
         with:
           python-version: '3.x'
       
       - run: python -m pip install scons
       
-      - run: |
+      - env:
+          SCONS_CACHE: ${{github.workspace}}/.scons_cache/
+        run: |
           scons tools=yes target=release_debug
           scons tools=no target=release
       
@@ -49,18 +59,78 @@ jobs:
         with:
           path: modules/gdaudioext
       
+      - uses: actions/checkout@v2
+        with:
+          repository: FFmpeg/FFmpeg
+          path: ffmpeg
+      
+      - id: windows-cache
+        uses: actions/cache@v2
+        with:
+          path: ${{github.workspace}}/.scons_cache/
+          key: ${{github.job}}-${{github.ref}}-${{github.sha}}
+      
       - uses: actions/setup-python@v2
         with:
           python-version: '3.x'
       
       - run: python -m pip install scons
       
-      - run: |
+      - env:
+          CPPPATH: ${{github.workspace}}/ffmpeg
+          SCONS_CACHE: ${{github.workspace}}/.scons_cache/
+        run: |
           scons tools=yes target=release_debug
           scons tools=no target=release
       
       - uses: actions/upload-artifact@v2
         with:
-          name: Linux
+          name: Windows
+          path: bin/*
+          retention-days: 14
+  android:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - run: |
+          sudo apt-get update
+          sudo apt-get install build-essential pkg-config libx11-dev libxcursor-dev libxinerama-dev libgl1-mesa-dev libglu-dev libasound2-dev libpulse-dev libdbus-1-dev libudev-dev libxi-dev libxrandr-dev libavutil-dev libavformat-dev libavcodec-dev libswresample-dev yasm
+      
+      - uses: actions/checkout@v2
+        with:
+          repository: godotengine/godot
+          ref: 3.x
+      
+      - uses: actions/checkout@v2
+        with:
+          path: modules/gdaudioext
+      
+      - id: android-cache
+        uses: actions/cache@v2
+        with:
+          path: ${{github.workspace}}/.scons_cache/
+          key: ${{github.job}}-${{github.ref}}-${{github.sha}}
+      
+      - uses: actions/setup-java@v1
+        with:
+          java-version: 8
+      
+      - uses: actions/setup-python@v2
+        with:
+          python-version: '3.x'
+      
+      - run: python -m pip install scons
+      
+      - env:
+          SCONS_CACHE: ${{github.workspace}}/.scons_cache/
+        run: |
+          scons target=release tools=no android_arch=armv7
+          scons target=release tools=no android_arch=arm64v8
+          cd platform/android/java
+          ./gradlew generateGodotTemplates
+      
+      - uses: actions/upload-artifact@v2
+        with:
+          name: Android
           path: bin/*
           retention-days: 14
