@@ -77,7 +77,7 @@ jobs:
       - run: python -m pip install scons
       
       - env:
-          CPPPATH: ${{github.workspace}}/ffmpeg
+          CPPPATH: ffmpeg
           SCONS_CACHE: ${{github.workspace}}/.scons_cache/
         run: |
           scons tools=yes target=release_debug
@@ -124,8 +124,8 @@ jobs:
       - env:
           SCONS_CACHE: ${{github.workspace}}/.scons_cache/
         run: |
-          scons target=release tools=no android_arch=armv7
-          scons target=release tools=no android_arch=arm64v8
+          scons platform=android target=release tools=no android_arch=armv7
+          scons platform=android target=release tools=no android_arch=arm64v8
           cd platform/android/java
           ./gradlew generateGodotTemplates
       
