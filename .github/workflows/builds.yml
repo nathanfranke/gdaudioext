@@ -1,0 +1,66 @@
+name: Builds
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - run: sudo apt-get install build-essential pkg-config libx11-dev libxcursor-dev libxinerama-dev libgl1-mesa-dev libglu-dev libasound2-dev libpulse-dev libdbus-1-dev libudev-dev libxi-dev libxrandr-dev yasm
+      
+      - uses: actions/checkout@v2
+        with:
+          repository: godotengine/godot
+          ref: 3.x
+      
+      - uses: actions/checkout@v2
+        with:
+          path: modules/gdaudioext
+      
+      - uses: actions/setup-python@v2
+        with:
+          python-version: '3.x'
+      
+      - run: python -m pip install scons
+      
+      - run: |
+          scons tools=yes target=release_debug
+          scons tools=no target=release
+      
+      - uses: actions/upload-artifact@v2
+        with:
+          name: Linux
+          path: bin/*
+          retention-days: 14
+  windows:
+    runs-on: windows-latest
+    
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          repository: godotengine/godot
+          ref: 3.x
+      
+      - uses: actions/checkout@v2
+        with:
+          path: modules/gdaudioext
+      
+      - uses: actions/setup-python@v2
+        with:
+          python-version: '3.x'
+      
+      - run: python -m pip install scons
+      
+      - run: |
+          scons tools=yes target=release_debug
+          scons tools=no target=release
+      
+      - uses: actions/upload-artifact@v2
+        with:
+          name: Linux
+          path: bin/*
+          retention-days: 14
