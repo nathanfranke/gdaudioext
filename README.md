@@ -5,11 +5,6 @@
 This module uses a class called `AudioStreamExt` to load and play audio. Attach it to an `AudioStreamPlayer` like any other stream.
 
 ```py
-# Copyright © 2021 Nathan Franke
-# This work is free. You can redistribute it and/or modify it under the
-# terms of the Do What The Fuck You Want To Public License, Version 2,
-# as published by Sam Hocevar. See http://www.wtfpl.net/ for more details.
-
 # Example usage of gdaudioext in Godot Engine.
 # https://github.com/nathanfranke/gdaudioext/
 extends Node
