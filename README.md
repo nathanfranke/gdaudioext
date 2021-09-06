@@ -27,11 +27,11 @@ func _ready() -> void:
 
 # This part is optional, but useful to show the module's capabilities.
 func _process(_delta: float) -> void:
-	# Seek left and right 10 seconds.
+	# Seek left and right 5 seconds.
 	if Input.is_action_just_pressed("ui_left"):
-		player.seek(player.get_playback_position() - 10.0)
+		player.seek(player.get_playback_position() - 5.0)
 	if Input.is_action_just_pressed("ui_right"):
-		player.seek(player.get_playback_position() + 10.0)
+		player.seek(player.get_playback_position() + 5.0)
 	
 	# Print current time and duration.
 	print("%.3f/%.3f" % [player.get_playback_position(), stream.get_length()])
