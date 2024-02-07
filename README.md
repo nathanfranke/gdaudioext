@@ -1,5 +1,7 @@
 # gdaudioext - Godot Audio [Extended](https://en.wikipedia.org/wiki/Libavcodec#Implemented_audio_codecs) Support
 
+# WARNING: This depends on FFMpeg libraries `avutil`, `avformat`, `avcodec`, and `swresample` being installed.
+
 ### Basic Usage:
 
 This module uses a class called `AudioStreamExt` to load and play audio. Attach it to an `AudioStreamPlayer` like any other stream.
