@@ -1,3 +1,5 @@
+# ⚠️ Archived - This project is no longer maintained
+
 # gdaudioext - Godot Audio [Extended](https://en.wikipedia.org/wiki/Libavcodec#Implemented_audio_codecs) Support
 
 # WARNING: This depends on FFMpeg libraries `avutil`, `avformat`, `avcodec`, and `swresample` being installed.
